@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! cargo run -p ttf-computer -- run    FONT TEXT [--ppem N] [--outputs N]
-//! cargo run -p ttf-computer -- render FONT TEXT [--size PX]
+//! cargo run -p ttf-computer -- render FONT TEXT [--size PX] [--png FILE]
 //! ```
 //!
 //! `run` executes each glyph's program with skrifa, using the same hinting
@@ -96,14 +96,14 @@ fn run(data: &[u8], text: &str, ppem: f32, outputs: usize) -> Result<(), String>
     Ok(())
 }
 
-fn render(data: Vec<u8>, text: &str, size: f32) {
+fn render(data: Vec<u8>, text: &str, size: f32, png: Option<&str>) {
     let mut font_system = FontSystem::new();
     font_system.db_mut().load_font_data(data);
     let mut swash_cache = SwashCache::new();
     let metrics = Metrics::new(size, size * 1.25);
     let mut buffer = Buffer::new(&mut font_system, metrics);
     let mut buffer = buffer.borrow_with(&mut font_system);
-    let width = 160.0;
+    let width = (text.chars().count() as f32 * size).max(16.0);
     buffer.set_size(Some(width), None);
     let attrs = Attrs::new().family(Family::Name("TTF Compute"));
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
@@ -121,6 +121,18 @@ fn render(data: Vec<u8>, text: &str, size: f32) {
             }
         }
     });
+    if let Some(path) = png {
+        let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
+        for (y, row) in canvas.iter().enumerate() {
+            for (x, &a) in row.iter().enumerate() {
+                let v = 255 - a;
+                pixmap.pixels_mut()[y * width as usize + x] =
+                    tiny_skia::PremultipliedColorU8::from_rgba(v, v, v, 255).unwrap();
+            }
+        }
+        pixmap.save_png(path).expect("write png");
+        return;
+    }
     for row in canvas {
         let line: String = row
             .iter()
@@ -137,7 +149,7 @@ fn render(data: Vec<u8>, text: &str, size: f32) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: ttf-computer (run|render) FONT TEXT [--ppem N] [--outputs N] [--size PX]";
+    let usage = "usage: ttf-computer (run|render) FONT TEXT [--ppem N] [--outputs N] [--size PX] [--png FILE]";
     if args.len() < 4 {
         eprintln!("{usage}");
         exit(2);
@@ -160,7 +172,13 @@ fn main() {
                 exit(1);
             }
         }
-        "render" => render(data, &args[3], opt("--size", 32.0)),
+        "render" => {
+            let png = args
+                .iter()
+                .position(|a| a == "--png")
+                .and_then(|i| args.get(i + 1));
+            render(data, &args[3], opt("--size", 32.0), png.map(|s| s.as_str()))
+        }
         _ => {
             eprintln!("{usage}");
             exit(2);
