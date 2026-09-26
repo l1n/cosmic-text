@@ -79,6 +79,11 @@ fn run(data: &[u8], text: &str, ppem: f32, outputs: usize) -> Result<(), String>
             ));
         }
 
+        if 3 + 2 * outputs > points.len() {
+            return Err(format!(
+                "the glyph has room for fewer than {outputs} outputs"
+            ));
+        }
         println!("{ch:?}:");
         for i in 0..outputs {
             let (lo, hi) = (points[2 + 2 * i].1, points[3 + 2 * i].1);
@@ -87,10 +92,8 @@ fn run(data: &[u8], text: &str, ppem: f32, outputs: usize) -> Result<(), String>
         }
 
         // Pixels are the 4-point contours after the reference contour.
-        let pixels: Vec<&Vec<(f32, f32)>> = contours[1..]
-            .iter()
-            .take_while(|c| c.len() == 4)
-            .collect();
+        let pixels: Vec<&Vec<(f32, f32)>> =
+            contours[1..].iter().take_while(|c| c.len() == 4).collect();
         let mut xs: Vec<i32> = pixels.iter().map(|c| fixed(c[0].0)).collect();
         xs.sort();
         xs.dedup();
@@ -109,28 +112,43 @@ fn run(data: &[u8], text: &str, ppem: f32, outputs: usize) -> Result<(), String>
 fn render(data: Vec<u8>, text: &str, size: f32, png: Option<&str>) {
     let mut font_system = FontSystem::new();
     font_system.db_mut().load_font_data(data);
+    // Use whatever family name the font was linked with (ttf-ld --family).
+    let family = font_system
+        .db()
+        .faces()
+        .last()
+        .and_then(|face| face.families.first())
+        .map(|(name, _)| name.clone())
+        .unwrap_or_default();
     let mut swash_cache = SwashCache::new();
     let metrics = Metrics::new(size, size * 1.25);
     let mut buffer = Buffer::new(&mut font_system, metrics);
     let mut buffer = buffer.borrow_with(&mut font_system);
     let width = (text.chars().count() as f32 * size).max(16.0);
     buffer.set_size(Some(width), None);
-    let attrs = Attrs::new().family(Family::Name("TTF Compute"));
+    let attrs = Attrs::new().family(Family::Name(&family));
     buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(true);
 
     let height = (metrics.line_height * buffer.layout_runs().count() as f32).ceil() as usize;
     let mut canvas = vec![vec![0u8; width as usize]; height];
-    buffer.draw(&mut swash_cache, Color::rgb(0xff, 0xff, 0xff), |x, y, w, h, color| {
-        for yy in y..y + h as i32 {
-            for xx in x..x + w as i32 {
-                if xx >= 0 && yy >= 0 && (yy as usize) < height && (xx as usize) < width as usize
-                {
-                    canvas[yy as usize][xx as usize] = color.a();
+    buffer.draw(
+        &mut swash_cache,
+        Color::rgb(0xff, 0xff, 0xff),
+        |x, y, w, h, color| {
+            for yy in y..y + h as i32 {
+                for xx in x..x + w as i32 {
+                    if xx >= 0
+                        && yy >= 0
+                        && (yy as usize) < height
+                        && (xx as usize) < width as usize
+                    {
+                        canvas[yy as usize][xx as usize] = color.a();
+                    }
                 }
             }
-        }
-    });
+        },
+    );
     if let Some(path) = png {
         let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32).unwrap();
         for (y, row) in canvas.iter().enumerate() {
@@ -177,7 +195,12 @@ fn main() {
     });
     match args[1].as_str() {
         "run" => {
-            if let Err(e) = run(&data, &args[3], opt("--ppem", 16.0), opt("--outputs", 8.0) as usize) {
+            if let Err(e) = run(
+                &data,
+                &args[3],
+                opt("--ppem", 16.0),
+                opt("--outputs", 8.0) as usize,
+            ) {
                 eprintln!("error: {e}");
                 exit(1);
             }
