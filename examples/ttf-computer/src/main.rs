@@ -41,6 +41,11 @@ impl OutlinePen for Points {
     fn close(&mut self) {}
 }
 
+/// Written by ttf-ld into the last outline point after the program returns.
+/// Hinting failures (e.g. running out of instructions) make renderers fall
+/// back to the unhinted outline silently, so this is how we detect them.
+const COMPLETION_MARKER: i32 = 1000;
+
 fn fixed(v: f32) -> i32 {
     (v * 64.0).round() as i32
 }
@@ -65,9 +70,14 @@ fn run(data: &[u8], text: &str, ppem: f32, outputs: usize) -> Result<(), String>
         glyph
             .draw(DrawSettings::hinted(&instance, false), &mut pen)
             .map_err(|e| format!("glyph {ch:?}: {e}"))?;
-        // Flatten, dropping the closing point some pens repeat.
-        let contours: Vec<Vec<(f32, f32)>> = pen.0;
+        let contours = pen.0;
         let points: Vec<(f32, f32)> = contours.iter().flatten().copied().collect();
+        if points.last().map(|p| fixed(p.1)) != Some(COMPLETION_MARKER) {
+            return Err(format!(
+                "glyph {ch:?}: the hinting program did not complete \
+                 (instruction or loop budget exceeded, or a runtime error)"
+            ));
+        }
 
         println!("{ch:?}:");
         for i in 0..outputs {
